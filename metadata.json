@@ -1,0 +1,5 @@
+{
+  "name": "Datenmanagement Excel Analyst",
+  "description": "Upload Excel files to visualize data instantly and generate AI-powered insights using Gemini.",
+  "requestFramePermissions": []
+}

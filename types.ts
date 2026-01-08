@@ -1,0 +1,61 @@
+export interface DataRow {
+  [key: string]: string | number | boolean | null;
+}
+
+export interface ColumnAnalysis {
+  key: string;
+  type: 'string' | 'number' | 'date' | 'boolean' | 'unknown';
+  uniqueValues: number;
+  min?: number;
+  max?: number;
+}
+
+export interface Dataset {
+  id: string; // Unique ID for persistence
+  fileName: string;
+  data: DataRow[];
+  columns: string[];
+  analysis: ColumnAnalysis[];
+  createdAt: number;
+}
+
+export interface ChartConfig {
+  xAxisKey: string;
+  dataKeys: string[];
+  barChartTitle: string;
+  areaChartTitle: string;
+}
+
+// Updated WidgetType - removed 'ai-analysis' as it is now a panel
+export type WidgetType = 'bar' | 'area' | 'line' | 'pie' | 'table';
+
+export interface Widget {
+  id: string;
+  datasetId: string;
+  type: WidgetType;
+  title: string; // Custom title for the hypothesis
+  width: 'half' | 'full'; // New property for resizing
+}
+
+export interface Filter {
+  id: string;
+  column: string;
+  value: string | number | boolean;
+}
+
+export interface DashboardPage {
+  id: string;
+  name: string;
+  widgets: Widget[];
+  filters: Filter[];
+  createdAt: number;
+}
+
+// New Type for Chat
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  isAnalysis?: boolean;
+}
