@@ -577,6 +577,13 @@ const App: React.FC = () => {
         setDatasets(storedDatasets);
         setPages(storedPages);
 
+        // Set active page to the first imported page if available
+        if (storedPages.length > 0) {
+          setActivePageId(storedPages[0].id);
+        } else if (storedDatasets.length > 0) {
+          setActiveDatasetId(storedDatasets[0].id);
+        }
+
         let message = `Restored ${importedDatasetsCount} datasets and ${importedPagesCount} dashboards.`;
         if (skippedDatasetsCount > 0) {
           message += ` (${skippedDatasetsCount} duplicate dataset(s) skipped)`;
