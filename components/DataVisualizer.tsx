@@ -11,11 +11,30 @@ interface DataVisualizerProps {
   filteredData?: DataRow[];
   mode?: 'full' | 'bar' | 'area' | 'line' | 'pie';
   customTitle?: string;
+  columnConfig?: {
+    xAxisKey: string;
+    dataKeys: string[];
+  };
+  sortConfig?: {
+    sortKey: string;
+    sortOrder: 'asc' | 'desc';
+  };
 }
 
-export const DataVisualizer: React.FC<DataVisualizerProps> = ({ dataset, filteredData, mode = 'full', customTitle }) => {
+export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ dataset, filteredData, mode = 'full', customTitle, columnConfig, sortConfig }) => {
   
-  const chartConfig = useMemo(() => suggestCharts(dataset.analysis), [dataset]);
+  const chartConfig = useMemo(() => {
+    // Use custom column config if provided, otherwise auto-detect
+    if (columnConfig) {
+      return {
+        xAxisKey: columnConfig.xAxisKey,
+        dataKeys: columnConfig.dataKeys,
+        barChartTitle: `${columnConfig.dataKeys[0]} by ${columnConfig.xAxisKey}`,
+        areaChartTitle: `${columnConfig.dataKeys[0]} Trends & Overview`
+      };
+    }
+    return suggestCharts(dataset.analysis);
+  }, [dataset, columnConfig]);
   
   // Neon-ish colors for dark mode
   const colors = ['#818cf8', '#34d399', '#f472b6', '#fbbf24', '#60a5fa', '#a78bfa', '#2dd4bf', '#fb7185'];
@@ -31,10 +50,22 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = ({ dataset, filtere
   // Use filtered data if provided, otherwise default to full dataset
   const sourceData = filteredData || dataset.data;
 
-  // Slice data for performance, except for Pie which needs strict aggregation usually, but we'll just slice for now
-  const displayData = sourceData.length > 2000 
-    ? sourceData.slice(0, 2000) 
-    : sourceData;
+  // Apply sorting if configured and limit data for performance
+  const sortedData = useMemo(() => {
+    let data = sourceData.length > 1000 ? sourceData.slice(0, 1000) : sourceData;
+    
+    if (sortConfig && chartConfig) {
+      // Sort by the dataKey value
+      const sortKey = sortConfig.sortKey;
+      data = [...data].sort((a, b) => {
+        const valA = Number(a[sortKey]) || 0;
+        const valB = Number(b[sortKey]) || 0;
+        return sortConfig.sortOrder === 'asc' ? valA - valB : valB - valA;
+      });
+    }
+    
+    return data;
+  }, [sourceData, sortConfig, chartConfig]);
 
   // Pie charts shouldn't have too many slices
   const pieData = sourceData.slice(0, 10); 
@@ -58,7 +89,7 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = ({ dataset, filtere
       <div className="flex-1 min-h-[300px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart 
-            data={displayData} 
+            data={sortedData} 
             margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
           >
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
@@ -108,7 +139,7 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = ({ dataset, filtere
       <div className="flex-1 min-h-[300px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart 
-            data={displayData} 
+            data={sortedData} 
             margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
           >
             <defs>
@@ -167,7 +198,7 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = ({ dataset, filtere
       <div className="flex-1 min-h-[300px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart 
-            data={displayData} 
+            data={sortedData} 
             margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
           >
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
@@ -267,4 +298,6 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = ({ dataset, filtere
       {renderAreaChart()}
     </div>
   );
-};
+});
+
+DataVisualizer.displayName = 'DataVisualizer';

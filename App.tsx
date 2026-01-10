@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { FileUpload } from './components/FileUpload';
-import { DataVisualizer } from './components/DataVisualizer';
-import { DataTable } from './components/DataTable';
+import React, { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
+const FileUpload = lazy(() => import('./components/FileUpload').then(m => ({ default: m.FileUpload })));
+const DataVisualizer = lazy(() => import('./components/DataVisualizer').then(m => ({ default: m.DataVisualizer })));
+const DataTable = lazy(() => import('./components/DataTable').then(m => ({ default: m.DataTable })));
 import { parseExcelFile, analyzeColumns } from './utils/dataUtils';
 import { Dataset, DashboardPage, Widget, WidgetType, Filter, DataRow } from './types';
 import { 
@@ -18,8 +18,8 @@ import {
   Pencil,
   X,
   Database,
+  Info,
   AreaChart as AreaChartIcon,
-  MoveHorizontal,
   ArrowLeft,
   ArrowRight,
   Maximize2,
@@ -35,8 +35,8 @@ import {
   PanelLeftOpen,
   Download,
   UploadCloud,
-  BrainCircuit,
-  Sparkles
+  Settings,
+  ArrowUpDown
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -57,6 +57,8 @@ const App: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDashboardsOpen, setIsDashboardsOpen] = useState(true);
   const [isDataSourcesOpen, setIsDataSourcesOpen] = useState(true);
+  // Dataset selection for bulk actions
+  const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([]);
 
   // Widget Title Editing State
   const [editingWidgetId, setEditingWidgetId] = useState<string | null>(null);
@@ -67,6 +69,18 @@ const App: React.FC = () => {
   const [tempFilterColumn, setTempFilterColumn] = useState<string>("");
   const [tempFilterValue, setTempFilterValue] = useState<string>("");
 
+  // Column Config Modal State
+  const [showColumnConfigModal, setShowColumnConfigModal] = useState(false);
+  const [columnConfigWidgetId, setColumnConfigWidgetId] = useState<string | null>(null);
+  const [tempXAxisKey, setTempXAxisKey] = useState<string>("");
+  const [tempDataKeys, setTempDataKeys] = useState<string[]>([]);
+
+  // Widget Data Sort Modal State
+  const [showWidgetSortModal, setShowWidgetSortModal] = useState(false);
+  const [widgetSortId, setWidgetSortId] = useState<string | null>(null);
+  const [tempSortKey, setTempSortKey] = useState<string>("");
+  const [tempSortOrder, setTempSortOrder] = useState<'asc' | 'desc'>('asc');
+
   // Delete Confirmation State
   const [deleteConfirmState, setDeleteConfirmState] = useState<{
     isOpen: boolean;
@@ -74,9 +88,28 @@ const App: React.FC = () => {
     id: string | null;
     name: string;
   }>({ isOpen: false, type: null, id: null, name: '' });
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const refreshFileInputRef = useRef<HTMLInputElement>(null);
+  const [refreshingDatasetId, setRefreshingDatasetId] = useState<string | null>(null);
+
+  // Folder management state
+  const [folderExpanded, setFolderExpanded] = useState<Set<string>>(new Set(['Unfiled'])); // Track which folders are expanded
+  const [showFolderModal, setShowFolderModal] = useState(false);
+  const [folderModalDatasetId, setFolderModalDatasetId] = useState<string | null>(null);
+  const [tempFolderName, setTempFolderName] = useState<string>("");
+
+  // Drag and drop state for moving datasets to folders
+  const [draggedDatasetId, setDraggedDatasetId] = useState<string | null>(null);
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+
+  // Fit-to-screen: refs and scale state to allow shrinking the widget grid to fit viewport
+  const widgetsViewportRef = useRef<HTMLDivElement | null>(null);
+  const widgetsGridRef = useRef<HTMLDivElement | null>(null);
+  const [fitToScreen, setFitToScreen] = useState(false);
+  const [fitScale, setFitScale] = useState<number>(1);
 
   // --- Initialization ---
   useEffect(() => {
@@ -98,6 +131,41 @@ const App: React.FC = () => {
     };
     init();
   }, []);
+
+  // Compute scale when fitToScreen is active or on resize / content changes
+  useEffect(() => {
+    const compute = () => {
+      const vp = widgetsViewportRef.current;
+      const grid = widgetsGridRef.current;
+      if (!vp || !grid) {
+        setFitScale(1);
+        return;
+      }
+
+      if (!fitToScreen) {
+        setFitScale(1);
+        return;
+      }
+
+      const vw = vp.clientWidth;
+      const vh = vp.clientHeight;
+      const gw = grid.scrollWidth || grid.offsetWidth;
+      const gh = grid.scrollHeight || grid.offsetHeight;
+      if (!gw || !gh) {
+        setFitScale(1);
+        return;
+      }
+
+      const scaleX = vw / gw;
+      const scaleY = vh / gh;
+      const newScale = Math.max(Math.min(scaleX, scaleY, 1), 0.25);
+      setFitScale(Number(newScale.toFixed(3)));
+    };
+
+    compute();
+    window.addEventListener('resize', compute);
+    return () => window.removeEventListener('resize', compute);
+  }, [fitToScreen, pages, datasets, activePageId]);
 
   // --- Helpers ---
   const activePage = pages.find(p => p.id === activePageId);
@@ -232,6 +300,52 @@ const App: React.FC = () => {
     await savePageToDB(updatedPage);
   };
 
+  const openColumnConfigModal = (widget: Widget, dataset: Dataset) => {
+    setColumnConfigWidgetId(widget.id);
+    setTempXAxisKey(widget.columnConfig?.xAxisKey || "");
+    setTempDataKeys(widget.columnConfig?.dataKeys || []);
+    setShowColumnConfigModal(true);
+  };
+
+  const applyColumnConfig = async () => {
+    if (!columnConfigWidgetId || !tempXAxisKey || tempDataKeys.length === 0) return;
+    
+    await updateWidget(columnConfigWidgetId, {
+      columnConfig: {
+        xAxisKey: tempXAxisKey,
+        dataKeys: tempDataKeys
+      }
+    });
+    
+    setShowColumnConfigModal(false);
+    setColumnConfigWidgetId(null);
+    setTempXAxisKey("");
+    setTempDataKeys([]);
+  };
+
+  const openWidgetSortModal = (widget: Widget, dataset: Dataset) => {
+    setWidgetSortId(widget.id);
+    setTempSortKey(widget.sortConfig?.sortKey || dataset.columns[0] || "");
+    setTempSortOrder(widget.sortConfig?.sortOrder || 'asc');
+    setShowWidgetSortModal(true);
+  };
+
+  const applyWidgetSort = async () => {
+    if (!widgetSortId || !tempSortKey) return;
+    
+    await updateWidget(widgetSortId, {
+      sortConfig: {
+        sortKey: tempSortKey,
+        sortOrder: tempSortOrder
+      }
+    });
+    
+    setShowWidgetSortModal(false);
+    setWidgetSortId(null);
+    setTempSortKey("");
+    setTempSortOrder('asc');
+  };
+
   const requestDeletePage = (id: string, name: string) => {
     setDeleteConfirmState({ isOpen: true, type: 'dashboard', id, name });
   };
@@ -284,6 +398,120 @@ const App: React.FC = () => {
     }
   };
 
+  const triggerRefreshDataset = (datasetId: string) => {
+    setRefreshingDatasetId(datasetId);
+    refreshFileInputRef.current?.click();
+  };
+
+  const handleRefreshDataset = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!refreshingDatasetId || !e.target.files || e.target.files.length === 0) {
+      e.target.value = '';
+      return;
+    }
+
+    // Only process the first file if multiple files are selected
+    const file = e.target.files[0];
+    try {
+      const { data, columns } = await parseExcelFile(file);
+      const analysis = analyzeColumns(data, columns);
+      
+      // Update the existing dataset with new data
+      const updatedDataset: Dataset = {
+        ...datasets.find(d => d.id === refreshingDatasetId)!,
+        data,
+        columns,
+        analysis,
+        fileName: file.name
+      };
+
+      // Update state and DB
+      setDatasets(prev => prev.map(d => d.id === refreshingDatasetId ? updatedDataset : d));
+      await saveDatasetToDB(updatedDataset);
+      
+      alert(`Dataset "${file.name}" refreshed successfully!`);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to refresh dataset.");
+    }
+    
+    setRefreshingDatasetId(null);
+    e.target.value = '';
+  };
+
+  const toggleFolder = (folderName: string) => {
+    const newExpanded = new Set(folderExpanded);
+    if (newExpanded.has(folderName)) {
+      newExpanded.delete(folderName);
+    } else {
+      newExpanded.add(folderName);
+    }
+    setFolderExpanded(newExpanded);
+  };
+
+  const assignDatasetToFolder = async (datasetId: string, folderName: string) => {
+    const dataset = datasets.find(d => d.id === datasetId);
+    if (!dataset) return;
+
+    const updatedDataset: Dataset = { ...dataset, folder: folderName };
+    setDatasets(prev => prev.map(d => d.id === datasetId ? updatedDataset : d));
+    await saveDatasetToDB(updatedDataset);
+    
+    // Expand the new folder
+    const newExpanded = new Set(folderExpanded);
+    newExpanded.add(folderName);
+    setFolderExpanded(newExpanded);
+    
+    setShowFolderModal(false);
+    setFolderModalDatasetId(null);
+    setTempFolderName("");
+  };
+
+  const getUniqueFolders = (): string[] => {
+    const folders = new Set<string>();
+    datasets.forEach(d => {
+      if (d.folder) folders.add(d.folder);
+      else folders.add('Unfiled');
+    });
+    return Array.from(folders).sort((a, b) => a === 'Unfiled' ? 1 : b === 'Unfiled' ? -1 : a.localeCompare(b));
+  };
+
+  // Drag and drop handlers for moving datasets to folders
+  const handleDatasetDragStart = (datasetId: string) => {
+    setDraggedDatasetId(datasetId);
+  };
+
+  const handleDatasetDragEnd = () => {
+    setDraggedDatasetId(null);
+    setDragOverFolder(null);
+  };
+
+  const handleFolderDragOver = (e: React.DragEvent<HTMLDivElement>, folderName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggedDatasetId) {
+      setDragOverFolder(folderName);
+    }
+  };
+
+  const handleFolderDragLeave = () => {
+    setDragOverFolder(null);
+  };
+
+  const handleFolderDrop = async (e: React.DragEvent<HTMLDivElement>, folderName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draggedDatasetId) return;
+
+    const dataset = datasets.find(d => d.id === draggedDatasetId);
+    if (dataset && dataset.folder !== folderName) {
+      // Update the dataset's folder
+      await assignDatasetToFolder(draggedDatasetId, folderName);
+    }
+
+    setDraggedDatasetId(null);
+    setDragOverFolder(null);
+  };
+
   // --- Backup Functions ---
   const handleExportBackup = () => {
     const backupData = {
@@ -306,6 +534,7 @@ const App: React.FC = () => {
   const triggerImport = () => importInputRef.current?.click();
 
   const handleImportBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Only process the first file if multiple files are selected
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -316,9 +545,18 @@ const App: React.FC = () => {
         
         let importedDatasetsCount = 0;
         let importedPagesCount = 0;
+        let skippedDatasetsCount = 0;
+
+        // Get existing dataset filenames to avoid duplicates
+        const existingFileNames = new Set(datasets.map(d => d.fileName));
 
         if (json.datasets && Array.isArray(json.datasets)) {
           for (const ds of json.datasets) {
+            // Skip if dataset with same filename already exists
+            if (existingFileNames.has(ds.fileName)) {
+              skippedDatasetsCount++;
+              continue;
+            }
             await saveDatasetToDB(ds);
             importedDatasetsCount++;
           }
@@ -339,7 +577,11 @@ const App: React.FC = () => {
         setDatasets(storedDatasets);
         setPages(storedPages);
 
-        alert(`Restored ${importedDatasetsCount} datasets and ${importedPagesCount} dashboards.`);
+        let message = `Restored ${importedDatasetsCount} datasets and ${importedPagesCount} dashboards.`;
+        if (skippedDatasetsCount > 0) {
+          message += ` (${skippedDatasetsCount} duplicate dataset(s) skipped)`;
+        }
+        alert(message);
       } catch (err) {
         console.error(err);
         alert("Failed to restore backup. Invalid file format.");
@@ -355,7 +597,8 @@ const App: React.FC = () => {
   const addWidget = async (datasetId: string, type: WidgetType) => {
     if (!activePageId) return;
     const page = pages.find(p => p.id === activePageId);
-    if (!page) return;
+    const dataset = datasets.find(d => d.id === datasetId);
+    if (!page || !dataset) return;
 
     let title = "New Widget";
     if (type === 'bar') title = "Metric Breakdown";
@@ -363,6 +606,10 @@ const App: React.FC = () => {
     if (type === 'line') title = "Growth Trend";
     if (type === 'pie') title = "Distribution";
     if (type === 'table') title = "Data Table";
+
+    // Add dataset filename to title
+    const fileName = dataset.fileName.replace(/\.[^/.]+$/, ""); // Remove file extension
+    title = `${title} - ${fileName}`;
 
     const newWidget: Widget = {
       id: crypto.randomUUID(),
@@ -426,6 +673,7 @@ const App: React.FC = () => {
   // --- File Input Helpers ---
   const triggerHiddenFileInput = () => fileInputRef.current?.click();
   const handleHiddenFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Only process the first file if multiple files are selected
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
       try {
@@ -457,6 +705,13 @@ const App: React.FC = () => {
       </div>
     );
   }
+
+  // Loading fallback component
+  const LoadingFallback = () => (
+    <div className="flex items-center justify-center w-full h-full">
+      <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+    </div>
+  );
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
@@ -565,7 +820,7 @@ const App: React.FC = () => {
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button 
-                          onClick={() => requestDeletePage(page.id, page.name)}
+                          onClick={(e) => { deleteButtonRef.current = e.currentTarget as HTMLButtonElement; requestDeletePage(page.id, page.name); }}
                           className="p-1.5 hover:bg-slate-700 rounded text-slate-500 hover:text-red-400"
                           title="Delete Dashboard"
                         >
@@ -606,36 +861,103 @@ const App: React.FC = () => {
 
             {(isDataSourcesOpen || isSidebarCollapsed) && (
               <div className={`space-y-1 mt-1 ${isSidebarCollapsed ? 'px-2' : 'px-4'}`}>
-                {datasets.map(ds => (
-                  <div key={ds.id} 
-                    className={`group flex items-center ${isSidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'} py-2 rounded-lg text-sm font-medium transition-all ${
-                      activeDatasetId === ds.id 
-                        ? 'bg-slate-800 text-white shadow-sm ring-1 ring-slate-700' 
-                        : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-                    }`}
-                    title={isSidebarCollapsed ? ds.fileName : undefined}
-                  >
-                    {/* Navigation Area */}
-                    <div 
-                      className={`flex-1 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'} cursor-pointer overflow-hidden`}
-                      onClick={() => { setActiveDatasetId(ds.id); setActivePageId(null); }}
-                    >
-                      <Database className={`w-4 h-4 shrink-0 ${activeDatasetId === ds.id ? 'text-indigo-400' : 'text-slate-600'}`} />
-                      {!isSidebarCollapsed && <span className="truncate">{ds.fileName}</span>}
+                {/* Render folders with datasets grouped inside */}
+                {getUniqueFolders().map(folder => {
+                  const datasetsInFolder = datasets.filter(d => (d.folder || 'Unfiled') === folder);
+                  const isExpanded = folderExpanded.has(folder);
+
+                  return (
+                    <div key={folder}>
+                      {/* Folder Header (if not collapsed sidebar) */}
+                      {!isSidebarCollapsed && (
+                        <div
+                          className={`flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer rounded transition-colors ${
+                            dragOverFolder === folder 
+                              ? 'bg-indigo-600/30 text-indigo-300 ring-1 ring-indigo-500' 
+                              : 'hover:bg-slate-900'
+                          }`}
+                          onClick={() => toggleFolder(folder)}
+                          onDragOver={(e) => handleFolderDragOver(e, folder)}
+                          onDragLeave={handleFolderDragLeave}
+                          onDrop={(e) => handleFolderDrop(e, folder)}
+                        >
+                          {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                          <span>{folder}</span>
+                        </div>
+                      )}
+
+                      {/* Datasets in folder */}
+                      {isExpanded && datasetsInFolder.map(ds => (
+                        <div key={ds.id} 
+                          draggable
+                          onDragStart={() => handleDatasetDragStart(ds.id)}
+                          onDragEnd={handleDatasetDragEnd}
+                          className={`group flex items-center ${isSidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'} py-2 rounded-lg text-sm font-medium transition-all cursor-grab active:cursor-grabbing ${
+                            draggedDatasetId === ds.id
+                              ? 'opacity-50 bg-slate-700'
+                              : activeDatasetId === ds.id 
+                              ? 'bg-slate-800 text-white shadow-sm ring-1 ring-slate-700' 
+                              : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                          }`}
+                          title={isSidebarCollapsed ? ds.fileName : undefined}
+                        >
+                          {/* Selection checkbox for bulk delete */}
+                          {!isSidebarCollapsed && (
+                            <div className="shrink-0">
+                              <input
+                                type="checkbox"
+                                className="mr-2"
+                                checked={selectedDatasetIds.includes(ds.id)}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedDatasetIds(prev => {
+                                    if (e.target.checked) return [...prev, ds.id];
+                                    return prev.filter(id => id !== ds.id);
+                                  });
+                                }}
+                              />
+                            </div>
+                          )}
+                          {/* Navigation Area */}
+                          <div 
+                            className={`flex-1 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'} cursor-pointer overflow-hidden`}
+                            onClick={() => { setActiveDatasetId(ds.id); setActivePageId(null); }}
+                          >
+                            <Database className={`w-4 h-4 shrink-0 ${activeDatasetId === ds.id ? 'text-indigo-400' : 'text-slate-600'}`} />
+                            {!isSidebarCollapsed && <span className="truncate">{ds.fileName}</span>}
+                          </div>
+                          
+                          {/* Action Buttons (Only visible when expanded) */}
+                          {!isSidebarCollapsed && (
+                            <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-all z-20">
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); setFolderModalDatasetId(ds.id); setTempFolderName(ds.folder || ""); setShowFolderModal(true); }}
+                                className="p-1.5 hover:bg-slate-700 rounded text-slate-500 hover:text-blue-400 transition-colors"
+                                title="Move to Folder"
+                              >
+                                <Database className="w-3.5 h-3.5" />
+                              </button>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); triggerRefreshDataset(ds.id); }}
+                                className="p-1.5 hover:bg-slate-700 rounded text-slate-500 hover:text-green-400 transition-colors"
+                                title="Refresh Dataset"
+                              >
+                                <UploadCloud className="w-3.5 h-3.5" />
+                              </button>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); deleteButtonRef.current = e.currentTarget as HTMLButtonElement; requestDeleteDataset(ds.id, ds.fileName); }}
+                                className="p-1.5 hover:bg-slate-700 rounded text-slate-500 hover:text-red-400 transition-colors"
+                                title="Delete Dataset"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                    
-                    {/* Action Buttons (Only visible when expanded) */}
-                    {!isSidebarCollapsed && (
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); requestDeleteDataset(ds.id, ds.fileName); }}
-                        className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 hover:bg-slate-700 rounded text-slate-500 hover:text-red-400 transition-all z-20"
-                        title="Delete Dataset"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
                 {datasets.length === 0 && !isSidebarCollapsed && (
                   <div className="px-3 py-2 text-sm text-slate-600 italic">No files loaded</div>
                 )}
@@ -647,23 +969,49 @@ const App: React.FC = () => {
         {/* Backup / Restore Section (Bottom) */}
         <div className="border-t border-slate-800 p-3 bg-slate-950/50">
            {!isSidebarCollapsed ? (
-             <div className="grid grid-cols-2 gap-2">
-               <button 
-                 onClick={handleExportBackup}
-                 className="flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white rounded-lg transition-colors text-xs font-medium"
-                 title="Download Backup"
-               >
-                 <Download className="w-3.5 h-3.5" />
-                 <span>Backup</span>
-               </button>
-               <button 
-                 onClick={triggerImport}
-                 className="flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white rounded-lg transition-colors text-xs font-medium"
-                 title="Restore Backup"
-               >
-                 <UploadCloud className="w-3.5 h-3.5" />
-                 <span>Restore</span>
-               </button>
+             <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={handleExportBackup}
+                  className="flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white rounded-lg transition-colors text-xs font-medium"
+                  title="Download Backup"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Backup</span>
+                </button>
+                <button 
+                  onClick={triggerImport}
+                  className="flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white rounded-lg transition-colors text-xs font-medium"
+                  title="Restore Backup"
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>Restore</span>
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  aria-label="Delete selected datasets"
+                  disabled={selectedDatasetIds.length === 0}
+                  onClick={(e) => {
+                    if (selectedDatasetIds.length === 0) return;
+                    deleteButtonRef.current = e.currentTarget as HTMLButtonElement;
+                    const ok = window.confirm(`Delete ${selectedDatasetIds.length} selected data source(s)? This will remove any widgets using them.`);
+                    if (!ok) return;
+                    const toDelete = new Set(selectedDatasetIds);
+                    setDatasets(prev => prev.filter(d => !toDelete.has(d.id)));
+                    const updatedPages = pages.map(p => ({ ...p, widgets: p.widgets.filter(w => !toDelete.has(w.datasetId)) }));
+                    setPages(updatedPages);
+                    for (const p of updatedPages) savePageToDB(p);
+                    for (const id of selectedDatasetIds) deleteDatasetFromDB(id);
+                    setSelectedDatasetIds([]);
+                    if (selectedDatasetIds.includes(activeDatasetId || '')) setActiveDatasetId(null);
+                  }}
+                  className={`p-2 rounded-md transition-colors ${selectedDatasetIds.length === 0 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700 text-white'}`} 
+                  title="Delete selected datasets"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
              </div>
            ) : (
              <div className="flex flex-col gap-2 items-center">
@@ -691,6 +1039,13 @@ const App: React.FC = () => {
             className="hidden" 
             accept=".xlsx,.xls,.csv" 
             onChange={handleHiddenFileChange}
+        />
+        <input 
+            type="file" 
+            ref={refreshFileInputRef}
+            className="hidden" 
+            accept=".xlsx,.xls,.csv" 
+            onChange={handleRefreshDataset}
         />
         <input 
             type="file" 
@@ -742,12 +1097,13 @@ const App: React.FC = () => {
                
                <div className="flex items-center gap-2 shrink-0">
                  <button 
-                   onClick={() => requestDeletePage(activePage.id, activePage.name)}
+                   onClick={(e) => { deleteButtonRef.current = e.currentTarget as HTMLButtonElement; requestDeletePage(activePage.id, activePage.name); }}
                    className="flex items-center gap-2 text-slate-400 hover:text-red-400 hover:bg-red-400/10 px-3 py-2 rounded-lg transition-colors text-sm font-medium border border-slate-800 hover:border-red-400/30"
                  >
                    <Trash2 className="w-4 h-4" />
                    <span className="hidden sm:inline">Delete</span>
                  </button>
+                 
                  <button 
                    onClick={() => setShowAddWidgetModal(true)}
                    className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
@@ -755,10 +1111,23 @@ const App: React.FC = () => {
                    <Plus className="w-4 h-4" />
                    Add Widget
                  </button>
+                 
+                 <button
+                   onClick={() => setFitToScreen(prev => !prev)}
+                   className="flex items-center gap-2 ml-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                   title={fitToScreen ? 'Exit fit-to-screen' : 'Fit widgets to screen'}
+                 >
+                   {fitToScreen ? (
+                     <Minimize2 className="w-4 h-4" />
+                   ) : (
+                     <Maximize2 className="w-4 h-4" />
+                   )}
+                   <span className="hidden sm:inline">{fitToScreen ? 'Exit Fit' : 'Fit'}</span>
+                 </button>
                </div>
             </header>
 
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+            <div ref={widgetsViewportRef} className="flex-1 overflow-y-auto p-8 custom-scrollbar">
                {activePage.widgets.length === 0 ? (
                  <div className="h-full flex flex-col items-center justify-center text-slate-500 opacity-60">
                     <BarChart3 className="w-16 h-16 mb-4 stroke-1" />
@@ -766,7 +1135,7 @@ const App: React.FC = () => {
                     <p>Add widgets to start analyzing your data</p>
                  </div>
                ) : (
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-[1920px] mx-auto pb-20">
+                 <div ref={widgetsGridRef} style={fitToScreen ? { transform: `scale(${fitScale})`, transformOrigin: 'top center' } : undefined} className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-[1920px] mx-auto pb-20">
                     {activePage.widgets.map((widget, index) => {
                       const dataset = datasets.find(d => d.id === widget.datasetId);
                       const isFullWidth = widget.width === 'full';
@@ -778,8 +1147,8 @@ const App: React.FC = () => {
                       return (
                         <div key={widget.id} className={`${colSpan} min-h-[400px] flex flex-col relative group bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg transition-all hover:border-slate-700`}>
                            
-                           {/* Widget Controls Overlay */}
-                           <div className="absolute top-2 right-2 z-20 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/90 rounded-lg p-1 border border-slate-800 backdrop-blur-sm">
+                          {/* Widget Controls Overlay (moved slightly left to make room for info icon) */}
+                          <div className="absolute top-2 right-12 z-20 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/90 rounded-lg p-1 border border-slate-800 backdrop-blur-sm">
                               {/* Move Controls */}
                               <button onClick={() => moveWidget(index, 'left')} disabled={index === 0} className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30">
                                 <ArrowLeft className="w-3.5 h-3.5" />
@@ -797,6 +1166,31 @@ const App: React.FC = () => {
 
                               <div className="w-px bg-slate-700 mx-1"></div>
 
+                              {/* Column Config for Chart Widgets */}
+                              {(widget.type === 'bar' || widget.type === 'area' || widget.type === 'line' || widget.type === 'pie') && (
+                                <button 
+                                  onClick={() => dataset && openColumnConfigModal(widget, dataset)}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-400"
+                                  title="Configure columns"
+                                >
+                                  <Settings className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              <div className="w-px bg-slate-700 mx-1"></div>
+
+                              {(widget.type === 'bar' || widget.type === 'area' || widget.type === 'line') && (
+                                <button 
+                                  onClick={() => dataset && openWidgetSortModal(widget, dataset)}
+                                  className="p-1.5 text-slate-400 hover:text-green-400"
+                                  title="Sort data in chart"
+                                >
+                                  <ArrowUpDown className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              <div className="w-px bg-slate-700 mx-1"></div>
+
                               {/* Edit/Delete */}
                               <button 
                                 onClick={() => {
@@ -807,12 +1201,22 @@ const App: React.FC = () => {
                               >
                                 <Pencil className="w-3.5 h-3.5" />
                               </button>
-                              <button onClick={() => removeWidget(widget.id)} className="p-1.5 text-slate-400 hover:text-red-400">
+                              <button onClick={(e) => { deleteButtonRef.current = e.currentTarget as HTMLButtonElement; removeWidget(widget.id); }} className="p-1.5 text-slate-400 hover:text-red-400">
                                 <X className="w-3.5 h-3.5" />
                               </button>
                            </div>
 
                            {/* Content Layer */}
+
+                          {/* Dataset info icon (top-right) */}
+                          {dataset && (
+                            <div className="absolute top-2 right-2 z-30">
+                              <button title={dataset.fileName} className="p-1.5 bg-slate-800/70 hover:bg-slate-700 text-slate-300 rounded-full border border-slate-700">
+                                <Info className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
+
                            {dataset ? (
                              <>
                                {/* Inline Title Editor Overlay if active */}
@@ -845,7 +1249,9 @@ const App: React.FC = () => {
 
                                {(widget.type === 'bar' || widget.type === 'area' || widget.type === 'line' || widget.type === 'pie') && (
                                  <div className="h-full" onDoubleClick={() => { setEditingWidgetId(widget.id); setTempWidgetTitle(widget.title); }}>
-                                    <DataVisualizer dataset={dataset} filteredData={widgetData} mode={widget.type} customTitle={widget.title} />
+                                    <Suspense fallback={<LoadingFallback />}>
+                                      <DataVisualizer dataset={dataset} filteredData={widgetData} mode={widget.type} customTitle={widget.title} columnConfig={widget.columnConfig} sortConfig={widget.sortConfig} />
+                                    </Suspense>
                                  </div>
                                )}
                                {widget.type === 'table' && (
@@ -854,7 +1260,9 @@ const App: React.FC = () => {
                                       {widget.title}
                                     </div>
                                     <div className="flex-1 overflow-auto">
-                                       <DataTable dataset={dataset} filteredData={widgetData} />
+                                       <Suspense fallback={<LoadingFallback />}>
+                                         <DataTable dataset={dataset} filteredData={widgetData} />
+                                       </Suspense>
                                     </div>
                                  </div>
                                )}
@@ -887,7 +1295,8 @@ const App: React.FC = () => {
                <div>
                    {/* Delete Button in Header */}
                    <button 
-                     onClick={() => {
+                     onClick={(e) => {
+                       deleteButtonRef.current = e.currentTarget as HTMLButtonElement;
                        const ds = datasets.find(d => d.id === activeDatasetId);
                        if (ds) requestDeleteDataset(ds.id, ds.fileName);
                      }}
@@ -902,7 +1311,11 @@ const App: React.FC = () => {
                 {(() => {
                   const ds = datasets.find(d => d.id === activeDatasetId);
                   if (!ds) return null;
-                  return <DataTable dataset={ds} />;
+                  return (
+                    <Suspense fallback={<LoadingFallback />}>
+                      <DataTable dataset={ds} />
+                    </Suspense>
+                  );
                 })()}
              </div>
           </div>
@@ -918,7 +1331,9 @@ const App: React.FC = () => {
                 <h2 className="text-2xl font-bold text-white mb-2">Welcome to Data Deck</h2>
                 <p className="text-slate-400 mb-8">Select a dashboard from the sidebar or upload a new data source to begin.</p>
                 
-                <FileUpload onDataLoaded={handleDataLoaded} />
+                <Suspense fallback={<LoadingFallback />}>
+                  <FileUpload onDataLoaded={handleDataLoaded} />
+                </Suspense>
              </div>
           </div>
         )}
@@ -1048,37 +1463,247 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* DELETE CONFIRMATION MODAL */}
+        {/* DELETE CONFIRMATION POPOVER */}
         {deleteConfirmState.isOpen && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-sm shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-              <div className="p-6">
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="w-12 h-12 rounded-full bg-red-900/20 flex items-center justify-center shrink-0">
-                    <AlertTriangle className="w-6 h-6 text-red-500" />
+          <div className="fixed inset-0 z-[100]" onClick={() => setDeleteConfirmState(prev => ({ ...prev, isOpen: false }))}>
+            <div 
+              className="absolute bg-slate-900 border border-slate-800 rounded-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200 w-72"
+              style={{
+                top: deleteButtonRef.current ? deleteButtonRef.current.getBoundingClientRect().top + deleteButtonRef.current.getBoundingClientRect().height + 8 : '0',
+                left: deleteButtonRef.current ? Math.max(16, deleteButtonRef.current.getBoundingClientRect().left - 200) : '0'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-4">
+                <div className="flex items-start gap-3 mb-4">
+                  <div className="w-8 h-8 rounded-full bg-red-900/20 flex items-center justify-center shrink-0 mt-0.5">
+                    <AlertTriangle className="w-4 h-4 text-red-500" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-semibold text-white">Confirm Deletion</h3>
-                    <p className="text-sm text-slate-400">Are you sure you want to delete this?</p>
+                    <h3 className="text-sm font-semibold text-white">Delete?</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">This action cannot be undone</p>
                   </div>
                 </div>
                 
-                <div className="bg-slate-800/50 rounded-lg p-3 mb-6 border border-slate-800">
-                  <p className="text-slate-200 font-medium text-center break-words">{deleteConfirmState.name}</p>
+                <div className="bg-slate-800/30 rounded px-2 py-2 mb-4 border border-slate-800/50 max-h-16 overflow-hidden">
+                  <p className="text-slate-300 text-xs font-medium break-words line-clamp-2">{deleteConfirmState.name}</p>
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex gap-2">
                   <button 
                     onClick={() => setDeleteConfirmState(prev => ({ ...prev, isOpen: false }))}
-                    className="flex-1 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors"
+                    className="flex-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-medium transition-colors"
                   >
                     Cancel
                   </button>
                   <button 
                     onClick={executeDelete}
-                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-red-500/20"
+                    className="flex-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-medium transition-colors shadow-lg shadow-red-500/20"
                   >
                     Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* COLUMN CONFIG MODAL */}
+        {showColumnConfigModal && columnConfigWidgetId && activePage && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+              <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                <h3 className="text-lg font-semibold text-white">Configure Chart Columns</h3>
+                <button onClick={() => setShowColumnConfigModal(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5"/></button>
+              </div>
+              
+              <div className="p-6 space-y-4">
+                {(() => {
+                  const widget = activePage.widgets.find(w => w.id === columnConfigWidgetId);
+                  const dataset = widget ? datasets.find(d => d.id === widget.datasetId) : null;
+                  if (!dataset) return null;
+
+                  return (
+                    <>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">X-Axis Column</label>
+                        <select 
+                          value={tempXAxisKey}
+                          onChange={(e) => setTempXAxisKey(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="">Select column...</option>
+                          {dataset.columns.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Y-Axis Columns (Values)</label>
+                        <div className="space-y-2 max-h-[200px] overflow-y-auto border border-slate-800 rounded-lg p-3 bg-slate-950/50">
+                          {dataset.columns.map(col => (
+                            <label key={col} className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="checkbox" 
+                                checked={tempDataKeys.includes(col)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setTempDataKeys(prev => [...prev, col]);
+                                  } else {
+                                    setTempDataKeys(prev => prev.filter(k => k !== col));
+                                  }
+                                }}
+                                className="w-4 h-4 rounded"
+                              />
+                              <span className="text-sm text-slate-300">{col}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-2">
+                        <button onClick={() => setShowColumnConfigModal(false)} className="px-4 py-2 bg-slate-800 text-slate-200 rounded-lg hover:bg-slate-700">Cancel</button>
+                        <button 
+                          onClick={applyColumnConfig} 
+                          disabled={!tempXAxisKey || tempDataKeys.length === 0}
+                          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600"
+                        >
+                          <Check className="w-4 h-4" /> Apply Config
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* WIDGET DATA SORT MODAL */}
+        {showWidgetSortModal && widgetSortId && activePage && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+              <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                <h3 className="text-lg font-semibold text-white">Sort Widget Data</h3>
+                <button onClick={() => setShowWidgetSortModal(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5"/></button>
+              </div>
+              
+              <div className="p-6 space-y-4">
+                {(() => {
+                  const widget = activePage.widgets.find(w => w.id === widgetSortId);
+                  const dataset = widget ? datasets.find(d => d.id === widget.datasetId) : null;
+                  if (!dataset) return null;
+
+                  return (
+                    <>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Sort Column</label>
+                        <select 
+                          value={tempSortKey}
+                          onChange={(e) => setTempSortKey(e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="">Select column...</option>
+                          {dataset.columns.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Sort Order</label>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setTempSortOrder('asc')}
+                            className={`flex-1 px-3 py-2 rounded-lg font-medium text-sm transition-colors ${
+                              tempSortOrder === 'asc' 
+                                ? 'bg-indigo-600 text-white' 
+                                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            }`}
+                          >
+                            Ascending
+                          </button>
+                          <button
+                            onClick={() => setTempSortOrder('desc')}
+                            className={`flex-1 px-3 py-2 rounded-lg font-medium text-sm transition-colors ${
+                              tempSortOrder === 'desc' 
+                                ? 'bg-indigo-600 text-white' 
+                                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            }`}
+                          >
+                            Descending
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-2">
+                        <button onClick={() => setShowWidgetSortModal(false)} className="px-4 py-2 bg-slate-800 text-slate-200 rounded-lg hover:bg-slate-700">Cancel</button>
+                        <button 
+                          onClick={applyWidgetSort} 
+                          disabled={!tempSortKey}
+                          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600"
+                        >
+                          <Check className="w-4 h-4" /> Apply Sort
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* FOLDER ASSIGNMENT MODAL */}
+        {showFolderModal && folderModalDatasetId && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+              <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                <h3 className="text-lg font-semibold text-white">Move Dataset to Folder</h3>
+                <button onClick={() => { setShowFolderModal(false); setFolderModalDatasetId(null); }} className="text-slate-400 hover:text-white"><X className="w-5 h-5"/></button>
+              </div>
+              
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase mb-3">Select or Create Folder</label>
+                  <div className="space-y-2 max-h-[200px] overflow-y-auto border border-slate-800 rounded-lg p-3 bg-slate-950/50">
+                    {/* Existing folders */}
+                    {getUniqueFolders().map(folder => (
+                      <button
+                        key={folder}
+                        onClick={() => assignDatasetToFolder(folderModalDatasetId, folder)}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          tempFolderName === folder
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                      >
+                        {folder}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Or Create New Folder</label>
+                  <input
+                    type="text"
+                    placeholder="Folder name..."
+                    value={tempFolderName}
+                    onChange={(e) => setTempFolderName(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button onClick={() => { setShowFolderModal(false); setFolderModalDatasetId(null); }} className="px-4 py-2 bg-slate-800 text-slate-200 rounded-lg hover:bg-slate-700">Cancel</button>
+                  <button 
+                    onClick={() => tempFolderName && assignDatasetToFolder(folderModalDatasetId, tempFolderName)}
+                    disabled={!tempFolderName}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600"
+                  >
+                    <Check className="w-4 h-4" /> Assign
                   </button>
                 </div>
               </div>

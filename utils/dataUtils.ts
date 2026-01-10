@@ -11,7 +11,7 @@ export const parseExcelFile = async (file: File): Promise<{ data: DataRow[]; col
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json<DataRow>(worksheet);
-        
+
         if (jsonData.length === 0) {
           resolve({ data: [], columns: [] });
           return;

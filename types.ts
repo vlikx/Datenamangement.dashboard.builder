@@ -17,6 +17,7 @@ export interface Dataset {
   columns: string[];
   analysis: ColumnAnalysis[];
   createdAt: number;
+  folder?: string; // Optional folder/group name for organization
 }
 
 export interface ChartConfig {
@@ -35,6 +36,14 @@ export interface Widget {
   type: WidgetType;
   title: string; // Custom title for the hypothesis
   width: 'half' | 'full'; // New property for resizing
+  columnConfig?: {
+    xAxisKey: string;
+    dataKeys: string[];
+  };
+  sortConfig?: {
+    sortKey: string; // Column to sort by
+    sortOrder: 'asc' | 'desc';
+  };
 }
 
 export interface Filter {

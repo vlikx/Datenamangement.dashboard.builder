@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Dataset, DataRow } from '../types';
 
 interface DataTableProps {
@@ -6,17 +6,26 @@ interface DataTableProps {
   filteredData?: DataRow[];
 }
 
-export const DataTable: React.FC<DataTableProps> = ({ dataset, filteredData }) => {
+export const DataTable: React.FC<DataTableProps> = React.memo(({ dataset, filteredData }) => {
   const sourceData = filteredData || dataset.data;
-  const displayRows = sourceData.slice(0, 100); 
+  
+  // Memoize display rows to avoid unnecessary recalculation
+  const displayRows = useMemo(() => sourceData.slice(0, 100), [sourceData]); 
 
   return (
     <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl flex flex-col h-[600px]">
       <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-        <h3 className="font-semibold text-slate-200">Raw Data Preview</h3>
-        <span className="text-xs text-slate-400 bg-slate-800 px-2 py-1 rounded border border-slate-700">
-          Showing {displayRows.length} of {sourceData.length} rows
-        </span>
+        <div className="flex items-center gap-4">
+          <h3 className="font-semibold text-slate-200">Raw Data Preview</h3>
+          <span className="text-xs text-slate-400 bg-slate-800 px-2 py-1 rounded border border-slate-700">
+            Showing {displayRows.length} of {sourceData.length} rows
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowCleaner(true)} className="text-sm px-3 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-200 border border-slate-700">
+            Clean Data
+          </button>
+        </div>
       </div>
       <div className="overflow-auto flex-1 custom-scrollbar">
         <table className="min-w-full divide-y divide-slate-800 text-left">
@@ -55,4 +64,6 @@ export const DataTable: React.FC<DataTableProps> = ({ dataset, filteredData }) =
       </div>
     </div>
   );
-};
+});
+
+DataTable.displayName = 'DataTable';

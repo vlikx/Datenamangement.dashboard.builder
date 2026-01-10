@@ -10,10 +10,28 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
       },
       plugins: [react()],
-            resolve: {
+      resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      build: {
+        // Optimize chunk sizes
+        rollupOptions: {
+          output: {
+            manualChunks: {
+              // Separate vendor libraries into their own chunks
+              'recharts': ['recharts'],
+              'xlsx': ['xlsx'],
+              'idb': ['idb'],
+              'lucide': ['lucide-react'],
+            }
+          }
+        },
+        // Increase chunk size warning limit to 500KB since we're splitting
+        chunkSizeWarningLimit: 600,
+        // Use default minification (esbuild)
+        minify: 'esbuild'
       }
     };
 });
