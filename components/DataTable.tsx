@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { Dataset, DataRow } from '../types';
+import { formatNumber } from '../utils/dataUtils';
 
 interface DataTableProps {
   dataset: Dataset;
@@ -45,11 +46,22 @@ export const DataTable: React.FC<DataTableProps> = React.memo(({ dataset, filter
           <tbody className="bg-slate-900 divide-y divide-slate-800">
             {displayRows.map((row, idx) => (
               <tr key={idx} className="hover:bg-slate-800/50 transition-colors">
-                {dataset.columns.map((col) => (
-                  <td key={`${idx}-${col}`} className="px-6 py-4 whitespace-nowrap text-sm text-slate-300 border-r border-slate-800/50 last:border-0">
-                    {row[col]?.toString() || <span className="text-slate-600">-</span>}
-                  </td>
-                ))}
+                {dataset.columns.map((col) => {
+                  const value = row[col];
+                  const isNumeric = !isNaN(Number(value)) && value !== null && value !== undefined && value !== '';
+                  const isYearColumn = col.toLowerCase().includes('year') || col.toLowerCase().includes('jahr');
+                  return (
+                    <td 
+                      key={`${idx}-${col}`} 
+                      className={`px-6 py-4 whitespace-nowrap text-sm text-slate-300 border-r border-slate-800/50 last:border-0 ${isNumeric ? 'text-right font-mono' : ''}`}
+                    >
+                      {value !== null && value !== undefined && value !== '' 
+                        ? (isNumeric ? (isYearColumn ? value.toString() : formatNumber(value)) : value.toString())
+                        : <span className="text-slate-600">-</span>
+                      }
+                    </td>
+                  );
+                })}
               </tr>
             ))}
             {displayRows.length === 0 && (

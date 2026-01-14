@@ -4,7 +4,7 @@ import {
   AreaChart, Area, LineChart, Line, PieChart, Pie, Cell
 } from 'recharts';
 import { Dataset, DataRow } from '../types';
-import { suggestCharts } from '../utils/dataUtils';
+import { suggestCharts, formatNumber, formatNumberShort } from '../utils/dataUtils';
 
 interface DataVisualizerProps {
   dataset: Dataset;
@@ -67,8 +67,23 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
     return data;
   }, [sourceData, sortConfig, chartConfig]);
 
-  // Pie charts shouldn't have too many slices
-  const pieData = sourceData.slice(0, 10); 
+  // Pie charts shouldn't have too many slices, and filter out zero/negligible values
+  const pieData = (() => {
+    const dataKey = chartConfig.dataKeys[0];
+    const total = sourceData.reduce((sum, item) => {
+      const value = Number(item[dataKey]);
+      return sum + (isNaN(value) ? 0 : value);
+    }, 0);
+    
+    return sourceData
+      .filter(item => {
+        const value = Number(item[dataKey]);
+        if (isNaN(value) || value <= 0) return false;
+        const percentage = (value / total) * 100;
+        return percentage >= 0.5; // Only show items with at least 0.5%
+      })
+      .slice(0, 10);
+  })(); 
 
   const renderTitle = (defaultTitle: string) => (
     <div className="flex items-center justify-between mb-4 shrink-0">
@@ -104,6 +119,8 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
               stroke="#64748b" 
               tick={{fill: '#94a3b8', fontSize: 12}}
               tickLine={false}
+              tickFormatter={(value) => formatNumberShort(value)}
+              width={100}
             />
             <Tooltip 
               contentStyle={{ 
@@ -115,6 +132,7 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
               }}
               itemStyle={{ color: '#e2e8f0' }}
               cursor={{ fill: '#1e293b' }}
+              formatter={(value: any) => formatNumber(value)}
             />
             <Legend wrapperStyle={{ paddingTop: '10px' }} />
             {chartConfig.dataKeys.map((key, index) => (
@@ -162,6 +180,8 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
               stroke="#64748b" 
               tick={{fill: '#94a3b8', fontSize: 12}}
               tickLine={false}
+              tickFormatter={(value) => formatNumberShort(value)}
+              width={100}
             />
             <Tooltip 
                contentStyle={{ 
@@ -172,6 +192,7 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
                 boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'
               }}
               itemStyle={{ color: '#e2e8f0' }}
+              formatter={(value: any) => formatNumber(value)}
             />
             <Legend wrapperStyle={{ paddingTop: '10px' }} />
             {chartConfig.dataKeys.map((key, index) => (
@@ -213,6 +234,8 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
               stroke="#64748b" 
               tick={{fill: '#94a3b8', fontSize: 12}}
               tickLine={false}
+              tickFormatter={(value) => formatNumberShort(value)}
+              width={100}
             />
             <Tooltip 
                contentStyle={{ 
@@ -223,6 +246,7 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
                 boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'
               }}
               itemStyle={{ color: '#e2e8f0' }}
+              formatter={(value: any) => formatNumber(value)}
             />
             <Legend wrapperStyle={{ paddingTop: '10px' }} />
             {chartConfig.dataKeys.map((key, index) => (
@@ -274,6 +298,7 @@ export const DataVisualizer: React.FC<DataVisualizerProps> = React.memo(({ datas
                 boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'
               }}
               itemStyle={{ color: '#e2e8f0' }}
+              formatter={(value: any) => formatNumber(value)}
             />
           </PieChart>
         </ResponsiveContainer>

@@ -36,7 +36,8 @@ import {
   Download,
   UploadCloud,
   Settings,
-  ArrowUpDown
+  ArrowUpDown,
+  ExternalLink
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -89,6 +90,17 @@ const App: React.FC = () => {
     name: string;
   }>({ isOpen: false, type: null, id: null, name: '' });
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Data Source Info Modal State
+  const [showDataSourceModal, setShowDataSourceModal] = useState(false);
+  const [dataSourceModalDatasetId, setDataSourceModalDatasetId] = useState<string | null>(null);
+  const [isEditingDataSource, setIsEditingDataSource] = useState(false);
+  const [tempDataSource, setTempDataSource] = useState({
+    name: '',
+    url: '',
+    description: '',
+    lastUpdated: ''
+  });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -512,6 +524,50 @@ const App: React.FC = () => {
     setDragOverFolder(null);
   };
 
+  const deleteFolder = async (folderName: string) => {
+    if (folderName === 'Unfiled') {
+      alert("Cannot delete the 'Unfiled' folder.");
+      return;
+    }
+
+    const datasetsInFolder = datasets.filter(d => d.folder === folderName);
+    const ok = window.confirm(`Delete folder "${folderName}" and all ${datasetsInFolder.length} dataset(s) inside? This action cannot be undone.`);
+    if (!ok) return;
+
+    // Get IDs of datasets to delete
+    const datasetIdsToDelete = datasetsInFolder.map(d => d.id);
+
+    // Remove datasets from state
+    setDatasets(prev => prev.filter(d => d.folder !== folderName));
+
+    // Remove widgets that use these datasets from all pages
+    const updatedPages = pages.map(p => ({
+      ...p,
+      widgets: p.widgets.filter(w => !datasetIdsToDelete.includes(w.datasetId))
+    }));
+    setPages(updatedPages);
+
+    // Save updated pages to DB
+    for (const page of updatedPages) {
+      await savePageToDB(page);
+    }
+
+    // Delete datasets from DB
+    for (const datasetId of datasetIdsToDelete) {
+      await deleteDatasetFromDB(datasetId);
+    }
+
+    // Remove folder from expanded set
+    const newExpanded = new Set(folderExpanded);
+    newExpanded.delete(folderName);
+    setFolderExpanded(newExpanded);
+
+    // If currently viewing a deleted dataset, clear the view
+    if (activeDatasetId && datasetIdsToDelete.includes(activeDatasetId)) {
+      setActiveDatasetId(null);
+    }
+  };
+
   // --- Backup Functions ---
   const handleExportBackup = () => {
     const backupData = {
@@ -658,6 +714,47 @@ const App: React.FC = () => {
     await savePageToDB(updatedPage);
   };
 
+  // Data Source Modal Functions
+  const openDataSourceModal = (datasetId: string) => {
+    const dataset = datasets.find(ds => ds.id === datasetId);
+    if (!dataset) return;
+    
+    setDataSourceModalDatasetId(datasetId);
+    setTempDataSource({
+      name: dataset.dataSource?.name || '',
+      url: dataset.dataSource?.url || '',
+      description: dataset.dataSource?.description || '',
+      lastUpdated: dataset.dataSource?.lastUpdated || ''
+    });
+    setShowDataSourceModal(true);
+  };
+
+  const saveDataSource = async () => {
+    if (!dataSourceModalDatasetId) return;
+    
+    const updatedDatasets = datasets.map(ds => {
+      if (ds.id === dataSourceModalDatasetId) {
+        return {
+          ...ds,
+          dataSource: {
+            name: tempDataSource.name || undefined,
+            url: tempDataSource.url || undefined,
+            description: tempDataSource.description || undefined,
+            lastUpdated: tempDataSource.lastUpdated || undefined
+          }
+        };
+      }
+      return ds;
+    });
+    
+    setDatasets(updatedDatasets);
+    const dataset = updatedDatasets.find(ds => ds.id === dataSourceModalDatasetId);
+    if (dataset) {
+      await saveDatasetToDB(dataset);
+    }
+    setShowDataSourceModal(false);
+  };
+
   const moveWidget = async (index: number, direction: 'left' | 'right') => {
     if (!activePageId) return;
     const page = pages.find(p => p.id === activePageId);
@@ -727,24 +824,27 @@ const App: React.FC = () => {
       <aside 
         className={`${isSidebarCollapsed ? 'w-20' : 'w-72'} bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 transition-all duration-300 ease-in-out`}
       >
-        <div className={`p-6 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
+        <div className={`p-6 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between'}`}>
+          {!isSidebarCollapsed && (
+            <div className="flex items-center gap-2">
+              <LayoutDashboard className="w-6 h-6 text-blue-500" />
+              <span className="font-bold text-lg tracking-tight text-white whitespace-nowrap">Dashboard Builder</span>
+            </div>
+          )}
+          {isSidebarCollapsed && (
+            <LayoutDashboard className="w-6 h-6 text-blue-500" />
+          )}
           <button 
             onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-            className="text-slate-500 hover:text-white transition-colors"
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white px-3 py-2 rounded-lg transition-all border border-slate-700 hover:border-slate-600"
+            title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
              {isSidebarCollapsed ? (
-                <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/20">
-                   <PanelLeftOpen className="w-5 h-5 text-white" />
-                </div>
+               <PanelLeftOpen className="w-4 h-4" />
              ) : (
-                <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/20">
-                   <PanelLeftClose className="w-5 h-5 text-white" />
-                </div>
+               <PanelLeftClose className="w-4 h-4" />
              )}
           </button>
-          {!isSidebarCollapsed && (
-            <span className="font-bold text-lg tracking-tight text-white whitespace-nowrap animate-in fade-in duration-200">Data Deck</span>
-          )}
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar overflow-x-hidden">
@@ -878,18 +978,34 @@ const App: React.FC = () => {
                       {/* Folder Header (if not collapsed sidebar) */}
                       {!isSidebarCollapsed && (
                         <div
-                          className={`flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer rounded transition-colors ${
+                          className={`group flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider rounded transition-colors ${
                             dragOverFolder === folder 
                               ? 'bg-indigo-600/30 text-indigo-300 ring-1 ring-indigo-500' 
                               : 'hover:bg-slate-900'
                           }`}
-                          onClick={() => toggleFolder(folder)}
                           onDragOver={(e) => handleFolderDragOver(e, folder)}
                           onDragLeave={handleFolderDragLeave}
                           onDrop={(e) => handleFolderDrop(e, folder)}
                         >
-                          {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                          <span>{folder}</span>
+                          <div 
+                            className="flex items-center gap-1.5 flex-1 cursor-pointer"
+                            onClick={() => toggleFolder(folder)}
+                          >
+                            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                            <span>{folder}</span>
+                          </div>
+                          {folder !== 'Unfiled' && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteFolder(folder);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-700 rounded text-slate-500 hover:text-red-400 transition-all"
+                              title="Delete folder"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                       )}
 
@@ -1155,7 +1271,7 @@ const App: React.FC = () => {
                         <div key={widget.id} className={`${colSpan} min-h-[400px] flex flex-col relative group bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg transition-all hover:border-slate-700`}>
                            
                           {/* Widget Controls Overlay (moved slightly left to make room for info icon) */}
-                          <div className="absolute top-2 right-12 z-20 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/90 rounded-lg p-1 border border-slate-800 backdrop-blur-sm">
+                          <div className="absolute top-2 right-2 z-20 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/90 rounded-lg p-1 border border-slate-800 backdrop-blur-sm">
                               {/* Move Controls */}
                               <button onClick={() => moveWidget(index, 'left')} disabled={index === 0} className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30">
                                 <ArrowLeft className="w-3.5 h-3.5" />
@@ -1215,15 +1331,6 @@ const App: React.FC = () => {
 
                            {/* Content Layer */}
 
-                          {/* Dataset info icon (top-right) */}
-                          {dataset && (
-                            <div className="absolute top-2 right-2 z-30">
-                              <button title={dataset.fileName} className="p-1.5 bg-slate-800/70 hover:bg-slate-700 text-slate-300 rounded-full border border-slate-700">
-                                <Info className="w-4 h-4" />
-                              </button>
-                            </div>
-                          )}
-
                            {dataset ? (
                              <>
                                {/* Inline Title Editor Overlay if active */}
@@ -1273,6 +1380,34 @@ const App: React.FC = () => {
                                     </div>
                                  </div>
                                )}
+
+                               {/* Data Source Badge (bottom-left) - Always visible */}
+                               <div className="absolute bottom-2 left-2 z-20">
+                                 <button
+                                   onClick={() => openDataSourceModal(dataset.id)}
+                                   className="flex items-center gap-1 px-2 py-1 bg-slate-800/90 hover:bg-slate-700/90 text-slate-400 hover:text-slate-200 rounded text-xs border border-slate-700/50 transition-colors"
+                                   title={dataset.dataSource?.name || dataset.fileName}
+                                 >
+                                   <Info className="w-3 h-3" />
+                                   {dataset.dataSource?.name ? (
+                                     <span className="max-w-[120px] truncate">{dataset.dataSource.name}</span>
+                                   ) : (
+                                     <span className="text-slate-500">Add source</span>
+                                   )}
+                                   {dataset.dataSource?.url && (
+                                     <a
+                                       href={dataset.dataSource.url}
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                       onClick={(e) => e.stopPropagation()}
+                                       className="ml-1 text-indigo-400 hover:text-indigo-300"
+                                       title="Open source link"
+                                     >
+                                       <ExternalLink className="w-3 h-3" />
+                                     </a>
+                                   )}
+                                 </button>
+                               </div>
                              </>
                            ) : (
                              <div className="h-full flex items-center justify-center text-red-400 bg-red-900/10">
@@ -1661,6 +1796,144 @@ const App: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* DATA SOURCE INFO MODAL */}
+        {showDataSourceModal && dataSourceModalDatasetId && (() => {
+          const dataset = datasets.find(ds => ds.id === dataSourceModalDatasetId);
+          return (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                <div className="p-3 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                  <h3 className="text-base font-semibold text-white">Data Source Information</h3>
+                  <button onClick={() => { setShowDataSourceModal(false); setIsEditingDataSource(false); }} className="text-slate-400 hover:text-white"><X className="w-4 h-4"/></button>
+                </div>
+                
+                <div className="p-4 space-y-3">
+                  {/* File Name (Read-only) */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">File Name</label>
+                    <div className="w-full bg-slate-800/50 border border-slate-700 rounded px-2 py-1.5 text-slate-300 text-sm">
+                      {dataset?.fileName}
+                    </div>
+                  </div>
+
+                  {!isEditingDataSource ? (
+                    /* VIEW MODE */
+                    <>
+                      {dataset?.dataSource && (dataset.dataSource.name || dataset.dataSource.url || dataset.dataSource.description || dataset.dataSource.lastUpdated) ? (
+                        <div className="bg-slate-950/50 rounded-lg p-3 space-y-2 text-sm">
+                          {dataset.dataSource.name && (
+                            <div>
+                              <span className="text-slate-400 text-xs">Source:</span>
+                              <div className="text-slate-200 mt-0.5">{dataset.dataSource.name}</div>
+                            </div>
+                          )}
+                          {dataset.dataSource.url && (
+                            <div>
+                              <span className="text-slate-400 text-xs">Link:</span>
+                              <div className="mt-0.5">
+                                <a href={dataset.dataSource.url} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 underline break-all text-sm">
+                                  {dataset.dataSource.url}
+                                </a>
+                              </div>
+                            </div>
+                          )}
+                          {dataset.dataSource.lastUpdated && (
+                            <div>
+                              <span className="text-slate-400 text-xs">Last Updated:</span>
+                              <div className="text-slate-200 mt-0.5">{dataset.dataSource.lastUpdated}</div>
+                            </div>
+                          )}
+                          {dataset.dataSource.description && (
+                            <div>
+                              <span className="text-slate-400 text-xs">Description:</span>
+                              <div className="text-slate-200 mt-0.5 whitespace-pre-wrap">{dataset.dataSource.description}</div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 text-slate-400 text-sm">
+                          No information available yet.
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end gap-2 pt-2">
+                        <button onClick={() => { setShowDataSourceModal(false); setIsEditingDataSource(false); }} className="px-3 py-1.5 bg-slate-800 text-slate-200 text-sm rounded hover:bg-slate-700">Close</button>
+                        <button 
+                          onClick={() => setIsEditingDataSource(true)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500"
+                        >
+                          <Pencil className="w-3.5 h-3.5" /> Edit
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    /* EDIT MODE */
+                    <>
+                      {/* Source Name */}
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Source Name</label>
+                        <input
+                          type="text"
+                          placeholder="e.g., Statistisches Bundesamt"
+                          value={tempDataSource.name}
+                          onChange={(e) => setTempDataSource(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* Source URL */}
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Source URL / Link</label>
+                        <input
+                          type="url"
+                          placeholder="https://..."
+                          value={tempDataSource.url}
+                          onChange={(e) => setTempDataSource(prev => ({ ...prev, url: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* Last Updated */}
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Last Updated</label>
+                        <input
+                          type="text"
+                          placeholder="e.g., January 2026"
+                          value={tempDataSource.lastUpdated}
+                          onChange={(e) => setTempDataSource(prev => ({ ...prev, lastUpdated: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* Description */}
+                      <div>
+                        <label className="block text-xs font-medium text-slate-400 mb-1">Description / Notes</label>
+                        <textarea
+                          placeholder="Additional context about this data..."
+                          value={tempDataSource.description}
+                          onChange={(e) => setTempDataSource(prev => ({ ...prev, description: e.target.value }))}
+                          rows={6}
+                          className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-indigo-500 resize-y"
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-2">
+                        <button onClick={() => { setIsEditingDataSource(false); }} className="px-3 py-1.5 bg-slate-800 text-slate-200 text-sm rounded hover:bg-slate-700">Cancel</button>
+                        <button 
+                          onClick={() => { saveDataSource(); setIsEditingDataSource(false); }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500"
+                        >
+                          <Check className="w-3.5 h-3.5" /> Save
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* FOLDER ASSIGNMENT MODAL */}
         {showFolderModal && folderModalDatasetId && (

@@ -54,6 +54,50 @@ export const analyzeColumns = (data: DataRow[], columns: string[]): ColumnAnalys
   });
 };
 
+// Format numbers with thousands separator (ISO/German format: 1.000.000)
+export const formatNumber = (value: any): string => {
+  // Return non-numeric values as-is
+  if (value === null || value === undefined || value === '') return '';
+  
+  const num = Number(value);
+  if (isNaN(num)) return String(value);
+  
+  // Check if it's an integer or float
+  if (Number.isInteger(num)) {
+    // Format integers with dot separator
+    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  } else {
+    // Format floats: use comma as decimal separator and dot for thousands
+    const parts = num.toFixed(2).split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return parts.join(',');
+  }
+};
+
+// Format numbers for chart axes with abbreviations (e.g., 1 Mio., 1 Mrd.)
+export const formatNumberShort = (value: any): string => {
+  if (value === null || value === undefined || value === '') return '';
+  
+  const num = Number(value);
+  if (isNaN(num)) return String(value);
+  
+  const absNum = Math.abs(num);
+  
+  if (absNum >= 1000000000) {
+    // Milliarden
+    return (num / 1000000000).toFixed(1).replace('.', ',') + ' Mrd.';
+  } else if (absNum >= 1000000) {
+    // Millionen
+    return (num / 1000000).toFixed(1).replace('.', ',') + ' Mio.';
+  } else if (absNum >= 1000) {
+    // Tausend
+    return (num / 1000).toFixed(1).replace('.', ',') + ' Tsd.';
+  } else {
+    // Kleinere Zahlen normal formatieren
+    return formatNumber(num);
+  }
+};
+
 // Heuristic to suggest chart config
 export const suggestCharts = (analysis: ColumnAnalysis[]): ChartConfig | null => {
   // Look for a categorical column (string, reasonably low cardinality) for X-Axis

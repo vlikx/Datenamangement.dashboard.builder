@@ -18,6 +18,12 @@ export interface Dataset {
   analysis: ColumnAnalysis[];
   createdAt: number;
   folder?: string; // Optional folder/group name for organization
+  dataSource?: {
+    name?: string; // e.g., "Statistisches Bundesamt"
+    url?: string; // Link to source
+    description?: string; // Additional context
+    lastUpdated?: string; // When the data was last updated
+  };
 }
 
 export interface ChartConfig {
